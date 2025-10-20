@@ -111,3 +111,7 @@ exit
 - 容器停止後，所有變更都會遺失（除非使用 volume 掛載）
 - 如需保存練習成果，建議使用 Docker volume 或 bind mount
 - 使用 `sudo` 時密碼為 `password` 
+
+
+### 學習參考文章連結
+https://ithelp.ithome.com.tw/users/20162250/ironman/6237

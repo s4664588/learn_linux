@@ -1,0 +1,153 @@
+# 目標伺服器 Dockerfile
+FROM ubuntu:22.04
+
+# 設定環境變數
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安裝服務和工具
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    nginx \
+    mysql-server \
+    netcat \
+    curl \
+    wget \
+    vim \
+    net-tools \
+    iputils-ping \
+    sudo \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 設定 root 密碼（用於 SSH 連線測試）
+RUN echo "root:rootpassword" | chpasswd
+
+# 設定 SSH 服務
+RUN mkdir /var/run/sshd && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# 設定 Nginx 字符編碼
+RUN echo 'server {\n\
+    listen 80 default_server;\n\
+    listen [::]:80 default_server;\n\
+    root /var/www/html;\n\
+    index index.html index.htm;\n\
+    server_name _;\n\
+    charset utf-8;\n\
+    \n\
+    location / {\n\
+        try_files $uri $uri/ =404;\n\
+        add_header Content-Type "text/html; charset=utf-8";\n\
+    }\n\
+    \n\
+    location /api/info {\n\
+        add_header Content-Type "text/plain; charset=utf-8";\n\
+        fastcgi_pass unix:/var/run/fcgiwrap.socket;\n\
+        fastcgi_param SCRIPT_FILENAME /usr/local/bin/api.sh;\n\
+        fastcgi_param REQUEST_URI $request_uri;\n\
+        include fastcgi_params;\n\
+    }\n\
+}' > /etc/nginx/sites-available/default
+
+# 設定 Nginx（模擬 Web 服務）
+RUN echo '<!DOCTYPE html>\n\
+<html>\n\
+<head>\n\
+    <meta charset="UTF-8">\n\
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n\
+    <title>Target Server</title>\n\
+    <style>\n\
+        body { font-family: "Microsoft JhengHei", Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }\n\
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }\n\
+        .server-info { background: #e8f4f8; padding: 20px; border-radius: 8px; border-left: 4px solid #007acc; }\n\
+        h1 { color: #333; text-align: center; }\n\
+        h2 { color: #007acc; }\n\
+        .status-success { color: #28a745; font-weight: bold; }\n\
+        .service-list { background: #f8f9fa; padding: 15px; border-radius: 5px; }\n\
+        .service-list li { margin: 5px 0; }\n\
+    </style>\n\
+</head>\n\
+<body>\n\
+    <div class="container">\n\
+        <h1>🎯 Target Server</h1>\n\
+        <div class="server-info">\n\
+            <h2>伺服器資訊</h2>\n\
+            <p><strong>主機名稱:</strong> <span id="hostname">載入中...</span></p>\n\
+            <p><strong>IP 位址:</strong> <span id="ip">載入中...</span></p>\n\
+            <p><strong>服務狀態:</strong> <span class="status-success">✅ 運行中</span></p>\n\
+            <p><strong>SSH Tunnel 測試:</strong> <span class="status-success">成功！</span></p>\n\
+        </div>\n\
+        <h3>🔗 可用服務</h3>\n\
+        <div class="service-list">\n\
+            <ul>\n\
+                <li>📄 HTTP Web 服務 (Port 80)</li>\n\
+                <li>🔐 SSH 服務 (Port 22)</li>\n\
+                <li>🗄️ MySQL 服務 (Port 3306)</li>\n\
+                <li>🖥️ 模擬 RDP 服務 (Port 3389)</li>\n\
+            </ul>\n\
+        </div>\n\
+        <div style="margin-top: 20px; padding: 10px; background: #d4edda; border-radius: 5px; border: 1px solid #c3e6cb;">\n\
+            <p><strong>📡 SSH Tunnel 狀態:</strong> 透過 localhost:8090 成功存取內部服務</p>\n\
+        </div>\n\
+    </div>\n\
+    <script>\n\
+        document.getElementById("hostname").textContent = window.location.hostname || "localhost";\n\
+        fetch("/api/info").then(r=>r.text()).then(ip => {\n\
+            document.getElementById("ip").textContent = ip || "內部網路";\n\
+        }).catch(() => {\n\
+            document.getElementById("ip").textContent = "內部網路 (10.100.0.x)";\n\
+        });\n\
+    </script>\n\
+</body>\n\
+</html>' > /var/www/html/index.html
+
+# 建立簡單的 API 端點
+RUN echo '#!/bin/bash\n\
+if [[ "$REQUEST_URI" == "/api/info" ]]; then\n\
+    echo "Content-Type: text/plain"\n\
+    echo ""\n\
+    hostname -I | tr -d " \\n"\n\
+fi' > /usr/local/bin/api.sh && chmod +x /usr/local/bin/api.sh
+
+# 設定 MySQL（基本配置）
+RUN service mysql start && \
+    mysql -e "CREATE USER 'testuser'@'%' IDENTIFIED BY 'testpass';" && \
+    mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'testuser'@'%';" && \
+    mysql -e "FLUSH PRIVILEGES;" && \
+    service mysql stop
+
+# 建立啟動腳本
+RUN echo '#!/bin/bash\n\
+\n\
+# 設定系統 locale 支援 UTF-8\n\
+export LANG=C.UTF-8\n\
+export LC_ALL=C.UTF-8\n\
+\n\
+# 啟動所有服務\n\
+service ssh start\n\
+nginx -t && service nginx start\n\
+service mysql start\n\
+\n\
+# 建立模擬 RDP 服務（使用 netcat 監聽 3389 port）\n\
+nc -l -p 3389 -k -e /bin/echo "RDP Service Simulation" &\n\
+\n\
+# 顯示伺服器資訊\n\
+echo "=== Target Server Started ==="\n\
+echo "伺服器名稱: $SERVER_NAME"\n\
+echo "IP 位址: $(hostname -I)"\n\
+echo "字符編碼: UTF-8"\n\
+echo "可用服務:"\n\
+echo "  - SSH (Port 22)"\n\
+echo "  - HTTP (Port 80) - UTF-8 編碼"\n\
+echo "  - MySQL (Port 3306)"\n\
+echo "  - RDP 模擬 (Port 3389)"\n\
+echo "============================="\n\
+\n\
+# 保持容器運行\n\
+tail -f /dev/null' > /start.sh && chmod +x /start.sh
+
+EXPOSE 22 80 3306 3389
+
+CMD ["/start.sh"]
+

@@ -1,0 +1,82 @@
+# SSH 跳板主機 Dockerfile
+FROM ubuntu:22.04
+
+# 設定環境變數
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 安裝 SSH 服務器和必要工具
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    sudo \
+    curl \
+    wget \
+    vim \
+    net-tools \
+    iputils-ping \
+    netcat \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 建立 SSH 使用者
+RUN useradd -m -s /bin/bash sshuser && \
+    echo "sshuser:password123" | chpasswd && \
+    usermod -aG sudo sshuser
+
+# 設定 SSH 服務
+RUN mkdir /var/run/sshd && \
+    mkdir -p /home/sshuser/.ssh && \
+    chmod 700 /home/sshuser/.ssh && \
+    chown sshuser:sshuser /home/sshuser/.ssh
+
+# SSH 配置
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PubkeyAuthentication yes/PubkeyAuthentication yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#AllowTcpForwarding yes/AllowTcpForwarding yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#GatewayPorts no/GatewayPorts yes/' /etc/ssh/sshd_config
+
+# 建立啟動腳本
+RUN echo '#!/bin/bash\n\
+# 啟動 SSH 服務\n\
+service ssh start\n\
+\n\
+# 顯示連線資訊\n\
+echo "=== SSH Gateway Server Started ==="\n\
+echo "SSH 連線指令: ssh -p 2222 sshuser@localhost"\n\
+echo "密碼: password123"\n\
+echo "內部網路 IP: $(hostname -I)"\n\
+echo "================================"\n\
+\n\
+# 保持容器運行\n\
+tail -f /dev/null' > /start.sh && chmod +x /start.sh
+
+# 切換到 SSH 使用者
+USER sshuser
+WORKDIR /home/sshuser
+
+# 建立範例 SSH 配置檔案
+RUN echo "# SSH 配置範例\n\
+# 連接到目標伺服器 1\n\
+Host target1\n\
+    HostName target-server-1\n\
+    User root\n\
+    Port 22\n\
+\n\
+# 連接到目標伺服器 2  \n\
+Host target2\n\
+    HostName target-server-2\n\
+    User root\n\
+    Port 22\n\
+\n\
+# SSH Tunnel 範例\n\
+# 本機 8080 port 轉發到 target-server-1 的 80 port\n\
+# ssh -L 8080:target-server-1:80 sshuser@ssh-gateway\n\
+" > /home/sshuser/.ssh/config && chmod 600 /home/sshuser/.ssh/config
+
+# 切換回 root 執行啟動腳本
+USER root
+
+EXPOSE 22
+
+CMD ["/start.sh"]
+
